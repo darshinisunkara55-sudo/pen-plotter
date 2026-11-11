@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pen Plotter</title>
+<style>
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --ink: #1d2126; --muted: #646b73; --line: #dcd8d0;
+    --accent: #0f6b5c; --accent-ink: #ffffff; --danger: #b3261e; --warn-bg: #fdf1dc; --warn-ink: #7a4b00;
+    --paper: #ffffff; --travel: #7fb4e6; --mark: #d9362b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181b; --panel: #1f2428; --ink: #eceff1; --muted: #a2abb3; --line: #363d43;
+      --accent: #3fb8a3; --accent-ink: #06201b; --danger: #ff8a80; --warn-bg: #3a2c12; --warn-ink: #ffd694;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; }
+  h1 { font-size: 20px; margin: 0; }
+  main { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; padding: 0 20px 20px; max-width: 1200px; margin: auto; }
+  section, details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  label { display: block; font-size: 14px; color: var(--muted); }
+  input[type=number] { width: 100%; padding: 8px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  button { font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+  #drop { display: block; border: 2px dashed var(--line); border-radius: 8px; padding: 18px 10px; text-align: center; cursor: pointer; color: var(--ink); }
+  #drop.over { border-color: var(--accent); }
+  #file { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  #file:focus-visible + #drop { outline: 2px solid var(--accent); }
+  #play { width: 100%; padding: 14px; font-size: 18px; font-weight: 600; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  #stop { color: var(--danger); border-color: var(--danger); font-weight: 600; }
+  #pill { font-size: 13px; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  #pill.on { color: var(--accent); border-color: var(--accent); }
+  #message { display: none; background: var(--warn-bg); color: var(--warn-ink); padding: 10px 12px; border-radius: 8px; font-size: 14px; margin-bottom: 12px; }
+  #message.show { display: block; }
+  #previewBox { position: relative; height: min(62vh, 620px); min-height: 280px; }
+  canvas { width: 100%; height: 100%; display: block; border-radius: 6px; }
+  #stats { font-size: 14px; color: var(--muted); min-height: 21px; margin: 0 0 8px; }
+  progress { width: 100%; height: 10px; margin-top: 10px; accent-color: var(--accent); }
+  summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+  details > div { margin-top: 10px; }
+  .jog { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 8px 0; }
+  .field { margin-top: 8px; }
+  #log { height: 130px; overflow: auto; font: 12px/1.4 Consolas, monospace; white-space: pre-wrap; background: var(--bg); border-radius: 6px; padding: 8px; margin: 0; }
+  .steps { margin: 0; padding-left: 22px; display: grid; gap: 10px; font-size: 14px; }
+  .steps p { margin: 4px 0 0; }
+  .pins { border-collapse: collapse; margin-top: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .pins th, .pins td { border: 1px solid var(--line); padding: 3px 8px; text-align: center; }
+  code { font: 12px Consolas, monospace; background: var(--bg); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+  .flips { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 14px; }
+  .flips label { display: flex; gap: 4px; align-items: center; color: var(--ink); }
+  .calib { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; margin-top: 6px; }
+  .sub { font-size: 14px; }
+  @media (max-width: 820px) { main { grid-template-columns: minmax(0, 1fr); padding: 0 16px 16px; } header { padding: 14px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pen Plotter</h1>
+  <span id="pill">Not connected</span>
+</header>
+
+<main>
+  <div>
+    <div id="message" role="alert"></div>
+
+    <details id="guide" open>
+      <summary>First-time setup</summary>
+      <div>
+        <ol class="steps">
+          <li><strong>Upload the firmware.</strong>
+            <p>In the Arduino IDE: Sketch &gt; Include Library &gt; Add .ZIP Library, choose <code>grbl_your_pins\grbl.zip</code>, then File &gt; Examples &gt; grbl &gt; grblUpload and click Upload.</p></li>
+          <li><strong>Wire the motors to the ULN2003 boards.</strong>
+            <table class="pins">
+              <thead><tr><th>Motor</th><th>IN1</th><th>IN2</th><th>IN3</th><th>IN4</th></tr></thead>
+              <tbody>
+                <tr><th>X</th><td>2</td><td>3</td><td>4</td><td>5</td></tr>
+                <tr><th>Y</th><td>6</td><td>7</td><td>8</td><td>9</td></tr>
+                <tr><th>Z (pen)</th><td>10</td><td>11</td><td>12</td><td>13</td></tr>
+              </tbody>
+            </table></li>
+          <li><strong>Power the boards with 5V, not 12V.</strong>
+            <p>Connect the supply's GND to the Arduino GND too.</p></li>
+          <li><strong>Test the motors.</strong>
+            <p>Close UGS. Open Machine setup below, press Connect to Arduino, then try each move button.</p></li>
+          <li><strong>Fix any motor that moves the wrong way.</strong>
+            <p>Tick Flip direction for that motor in Machine setup.</p></li>
+          <li><strong>Calibrate the distance.</strong>
+            <p>In Machine setup press Move X 10 mm, measure how far the pen really moved, type it in and press Fix X. Do the same for Y.</p></li>
+          <li><strong>Set the pen and drawing area.</strong>
+            <p>If Pen + pushes the pen into the paper, set Pen lift to -30. Set Max width and height to your machine's drawing area.</p></li>
+          <li><strong>Draw.</strong>
+            <p>Choose a picture, set the width to 2 cm, put the pen on the paper at the bottom-left corner and press Play.</p></li>
+        </ol>
+      </div>
+    </details>
+
+    <section>
+      <h2>1. Picture</h2>
+      <input id="file" type="file" accept="image/*">
+      <label id="drop" for="file">Choose a picture or drop it here</label>
+      <div class="field">
+        <label for="threshold">Darkness cut-off: <span id="thresholdValue"></span></label>
+        <input id="threshold" type="range" min="20" max="240">
+      </div>
+      <div class="field">
+        <label for="detail">Smoothing: <span id="detailValue"></span></label>
+        <input id="detail" type="range" min="0.5" max="5" step="0.5">
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Size on paper</h2>
+      <div class="row">
+        <div><label for="width">Width (cm)</label><input id="width" type="number" min="0.5" step="0.1" value="3"></div>
+        <div><label for="height">Height (cm)</label><input id="height" type="number" min="0.5" step="0.1" value="3"></div>
+      </div>
+      <p class="hint">Width and height stay in proportion.</p>
+    </section>
+
+    <section>
+      <h2>3. Plot</h2>
+      <p class="hint" style="margin:0 0 10px">Put the pen on the paper at the bottom-left corner of the drawing, then press Play.</p>
+      <button id="play" disabled>Play</button>
+      <div class="controls">
+        <button id="pause" disabled>Pause</button>
+        <button id="stop" disabled>Stop</button>
+      </div>
+      <progress id="progress" max="100" value="0"></progress>
+    </section>
+
+    <details id="setup">
+      <summary>Machine setup and motor test</summary>
+      <div>
+        <button id="connect">Connect to Arduino</button>
+        <label class="field" for="jogStep">Move by (mm, or degrees for pen)</label>
+        <input id="jogStep" type="number" min="0.1" step="0.5" value="5">
+        <div class="jog">
+          <button data-jog="X,1">X+</button><button data-jog="X,-1">X-</button>
+          <button data-jog="Y,1">Y+</button><button data-jog="Y,-1">Y-</button>
+          <button data-jog="Z,1">Pen +</button><button data-jog="Z,-1">Pen -</button>
+        </div>
+        <div class="flips">
+          <span>Flip direction:</span>
+          <label><input id="flipX" type="checkbox"> X</label>
+          <label><input id="flipY" type="checkbox"> Y</label>
+          <label><input id="flipZ" type="checkbox"> Pen</label>
+        </div>
+        <div class="field">
+          <strong class="sub">Calibrate distance</strong>
+          <div class="calib">
+            <button id="calMoveX">Move X 10 mm</button>
+            <input id="calX" type="number" min="0.1" step="0.1" placeholder="Moved (mm)" aria-label="How far X really moved, in mm">
+            <button id="calFixX">Fix X</button>
+            <button id="calMoveY">Move Y 10 mm</button>
+            <input id="calY" type="number" min="0.1" step="0.1" placeholder="Moved (mm)" aria-label="How far Y really moved, in mm">
+            <button id="calFixY">Fix Y</button>
+          </div>
+        </div>
+        <div class="row field">
+          <div><label for="bedW">Max width (cm)</label><input id="bedW" type="number" min="1" step="0.5"></div>
+          <div><label for="bedH">Max height (cm)</label><input id="bedH" type="number" min="1" step="0.5"></div>
+          <div><label for="speed">Speed (mm/min)</label><input id="speed" type="number" min="20" max="400" step="10"></div>
+          <div><label for="lift">Pen lift (degrees)</label><input id="lift" type="number" step="5"></div>
+          <div><label for="stepsX">X steps per mm</label><input id="stepsX" type="number" min="1" step="1"></div>
+          <div><label for="stepsY">Y steps per mm</label><input id="stepsY" type="number" min="1" step="1"></div>
+        </div>
+        <p class="hint">If the pen tilts into the paper when it should lift, make Pen lift negative.</p>
+        <button id="download" class="field" disabled>Download G-code</button>
+      </div>
+    </details>
+  </div>
+
+  <div>
+    <section>
+      <p id="stats">Choose a picture to see what will be drawn.</p>
+      <div id="previewBox"><canvas id="preview"></canvas></div>
+    </section>
+    <section>
+      <h2>Machine log</h2>
+      <pre id="log" aria-live="polite"></pre>
+    </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* ---------- saved settings ---------- */
+const settings = { threshold: 128, detail: 1, bedW: 4, bedH: 4, speed: 150, lift: 30, stepsX: 250, stepsY: 250,
+  flipX: false, flipY: false, flipZ: false };
+try { Object.assign(settings, JSON.parse(localStorage.getItem("plotter") || "{}")); } catch (e) { /* use defaults */ }
+function saveSettings() {
+  try { localStorage.setItem("plotter", JSON.stringify(settings)); } catch (e) { /* not saved */ }
+}
+
+/* ---------- picture -> outlines ---------- */
+// Follows the edges between dark and light pixels. Every loop comes back to its
+// start because each boundary corner has as many edges in as out.
+function traceImage(img, threshold, detail) {
+  const scale = Math.min(1, 700 / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#fff";                 // transparent PNGs become white
+  ctx.fillRect(0, 0, w, h);
+  ctx.filter = "blur(0.6px)";
+  ctx.drawImage(img, 0, 0, w, h);
+  const px = ctx.getImageData(0, 0, w, h).data;
+
+  const stride = w + 2;
+  const dark = new Uint8Array(stride * (h + 2));   // one empty pixel of border all round
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+      if (gray < threshold) dark[(y + 1) * stride + x + 1] = 1;
+    }
+  }
+
+  const edges = new Map();
+  const addEdge = (from, to) => {
+    if (edges.has(from)) edges.get(from).push(to); else edges.set(from, [to]);
+  };
+  const vs = w + 3;                        // corners per row
+  for (let y = 1; y <= h; y++) {
+    for (let x = 1; x <= w; x++) {
+      if (!dark[y * stride + x]) continue;
+      const tl = y * vs + x, tr = tl + 1, bl = tl + vs, br = bl + 1;
+      if (!dark[(y - 1) * stride + x]) addEdge(tl, tr);
+      if (!dark[y * stride + x + 1]) addEdge(tr, br);
+      if (!dark[(y + 1) * stride + x]) addEdge(br, bl);
+      if (!dark[y * stride + x - 1]) addEdge(bl, tl);
+    }
+  }
+
+  const loops = [];
+  while (edges.size) {
+    const start = edges.keys().next().value;
+    const loop = [];
+    let at = start;
+    do {
+      loop.push([at % vs, Math.floor(at / vs)]);
+      const next = edges.get(at);
+      const to = next.pop();
+      if (!next.length) edges.delete(at);
+      at = to;
+    } while (at !== start);
+    if (loop.length >= 12) loops.push(simplifyLoop(loop, detail));
+  }
+  return loops;
+}
+
+function simplify(points, tolerance) {     // Ramer-Douglas-Peucker line simplification
+  if (points.length < 3) return points;
+  const [ax, ay] = points[0], [bx, by] = points[points.length - 1];
+  const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+  let far = 0, index = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = Math.abs(dy * points[i][0] - dx * points[i][1] + bx * ay - by * ax) / len;
+    if (d > far) { far = d; index = i; }
+  }
+  if (far <= tolerance) return [points[0], points[points.length - 1]];
+  return simplify(points.slice(0, index + 1), tolerance).slice(0, -1)
+    .concat(simplify(points.slice(index), tolerance));
+}
+
+function simplifyLoop(loop, tolerance) {
+  let far = 0, index = 0;
+  loop.forEach((p, i) => {
+    const d = Math.hypot(p[0] - loop[0][0], p[1] - loop[0][1]);
+    if (d > far) { far = d; index = i; }
+  });
+  const first = simplify(loop.slice(0, index + 1), tolerance);
+  const second = simplify(loop.slice(index).concat([loop[0]]), tolerance);
+  return first.slice(0, -1).concat(second);
+}
+
+function boundsOf(paths) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const path of paths) {
+    for (const [x, y] of path) {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+  }
+  return { minX, minY, width: maxX - minX, height: maxY - minY, maxY };
+}
+
+// Pixels to mm: drawing starts at 0,0 (bottom-left) and Y points up.
+function toMillimetres(paths, widthMm) {
+  const b = boundsOf(paths);
+  const s = widthMm / b.width;
+  return paths.map((path) => {
+    const out = [];
+    for (const [x, y] of path) {
+      const p = [(x - b.minX) * s, (b.maxY - y) * s];
+      const last = out[out.length - 1];
+      if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) >= 0.1) out.push(p);
+    }
+    return out;
+  }).filter((path) => path.length >= 2);
+}
+
+// Nearest-next ordering so the pen travels less. Outlines are closed, so each
+// one can start from whichever corner is closest.
+function orderPaths(paths) {
+  const left = paths.slice();
+  const ordered = [];
+  let pos = [0, 0];
+  while (left.length) {
+    let best = 0, bestPoint = 0, bestDist = Infinity;
+    left.forEach((path, i) => {
+      path.forEach((p, j) => {
+        const d = Math.hypot(p[0] - pos[0], p[1] - pos[1]);
+        if (d < bestDist) { bestDist = d; best = i; bestPoint = j; }
+      });
+    });
+    const path = left.splice(best, 1)[0];
+    const open = path.slice(0, -1);        // last point repeats the first
+    const rotated = open.slice(bestPoint % open.length).concat(open.slice(0, bestPoint % open.length));
+    rotated.push(rotated[0]);
+    ordered.push(rotated);
+    pos = rotated[rotated.length - 1];
+  }
+  return ordered;
+}
+
+/* ---------- outlines -> G-code ---------- */
+// The Z stepper tilts the pen. Z is in degrees and Z0 is the pen on the paper.
+function makeGcode(paths, speed, lift) {
+  const penUp = `G0 Z${lift}`, penDown = "G1 Z0 F1500";
+  const lines = ["G21", "G90", penUp];
+  for (const path of paths) {
+    lines.push(`G0 X${path[0][0].toFixed(2)} Y${path[0][1].toFixed(2)}`, penDown);
+    path.slice(1).forEach(([x, y], i) => {
+      lines.push(`G1 X${x.toFixed(2)} Y${y.toFixed(2)}${i === 0 ? ` F${speed}` : ""}`);
+    });
+    lines.push(penUp);
+  }
+  lines.push("G0 X0 Y0", "G0 Z0");         // back to the start, ready for the next Play
+  return lines;
+}
+
+/* ---------- GRBL over USB ---------- */
+class Grbl {
+  constructor(onLine, onStatus, onClose) {
+    Object.assign(this, { onLine, onStatus, onClose });
+    this.port = null; this.waiting = []; this.captured = null; this.banner = false; this.wco = [0, 0, 0];
+  }
+  get open() { return !!this.port; }
+
+  async connect(port) {
+    await port.open({ baudRate: 115200 });
+    this.port = port;
+    this.writer = port.writable.getWriter();
+    this.readLoop();
+    await sleep(2200);                     // the Uno restarts when the port opens
+    await this.raw("\r\n\r\n");
+    for (let i = 0; i < 25 && !this.banner; i++) await sleep(100);
+    if (!this.banner) {
+      await this.raw("$I\n");              // already awake: ask for its version instead
+      for (let i = 0; i < 15 && !this.banner; i++) await sleep(100);
+    }
+    if (!this.banner) {
+      await this.close();
+      throw new Error("This port did not answer like GRBL. Is GRBL uploaded to the Arduino?");
+    }
+  }
+
+  async readLoop() {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    this.reader = this.port.readable.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n");
+        buffer = parts.pop();
+        parts.forEach((part) => { if (part.trim()) this.handle(part.trim()); });
+      }
+    } catch (e) { /* cable pulled or port closed */ }
+    this.finish();
+  }
+
+  handle(line) {
+    if (line.startsWith("<")) { this.handleStatus(line); return; }
+    if (/^Grbl |^\[VER:/.test(line)) this.banner = true;
+    if (line.startsWith("ALARM:")) {       // GRBL won't send "ok" for the command that caused it
+      this.onLine(line);
+      this.releaseWaiting("error:alarm");
+      return;
+    }
+    if (line === "ok" || line.startsWith("error:")) {
+      const done = this.waiting.shift();
+      if (done) done(line);
+      if (line !== "ok") this.onLine(line);
+      return;
+    }
+    if (this.captured) this.captured.push(line);
+    else this.onLine(line);
+  }
+
+  handleStatus(line) {
+    const parts = line.slice(1, -1).split("|");
+    const state = parts[0].split(":")[0];
+    const numbers = (name) => {
+      const part = parts.find((p) => p.startsWith(name + ":"));
+      return part ? part.slice(name.length + 1).split(",").map(Number) : null;
+    };
+    const wco = numbers("WCO");
+    if (wco) this.wco = wco;
+    const mpos = numbers("MPos");
+    const pos = numbers("WPos") || (mpos && mpos.map((v, i) => v - (this.wco[i] || 0)));
+    this.state = state;
+    this.onStatus(state, pos);
+    if (this.statusWaiter) { this.statusWaiter(state); this.statusWaiter = null; }
+  }
+
+  raw(text) { return this.writer.write(new TextEncoder().encode(text)); }
+
+  send(line) {
+    return new Promise((resolve) => {
+      this.waiting.push(resolve);
+      this.raw(line + "\n").catch(() => resolve("error:disconnected"));
+    });
+  }
+
+  async query(line) {                      // send a command and collect its reply lines
+    this.captured = [];
+    await this.send(line);
+    const lines = this.captured;
+    this.captured = null;
+    return lines;
+  }
+
+  status() {
+    return new Promise((resolve) => {
+      this.statusWaiter = resolve;
+      this.raw("?").catch(() => resolve("Disconnected"));
+      setTimeout(() => { if (this.statusWaiter === resolve) { this.statusWaiter = null; resolve("Unknown"); } }, 1000);
+    });
+  }
+
+  releaseWaiting(reply) {
+    this.waiting.splice(0).forEach((done) => done(reply));
+  }
+
+  finish() {
+    if (!this.port) return;
+    this.port = null;
+    this.releaseWaiting("error:disconnected");
+    this.onClose();
+  }
+
+  async close() {
+    const port = this.port;
+    if (!port) return;
+    this.port = null;
+    this.releaseWaiting("error:disconnected");
+    try { await this.reader.cancel(); } catch (e) { /* already gone */ }
+    try { this.reader.releaseLock(); this.writer.releaseLock(); await port.close(); } catch (e) { /* already gone */ }
+    this.onClose();
+  }
+}
+
+/* ---------- page state ---------- */
+const job = { running: false, paused: false, stop: false, lost: false };
+let image = null, loops = [], paths = [], gcode = [], aspect = 1, marker = null, drawnLines = 0;
+
+const grbl = new Grbl(
+  (line) => log(line),
+  (state, pos) => {
+    $("pill").textContent = state;
+    if (pos) { marker = pos; drawPreview(); }
+    if (state === "Alarm" && job.running) job.alarm = true;
+  },
+  () => {
+    $("pill").textContent = "Not connected";
+    $("pill").classList.remove("on");
+    if (job.running) { job.stop = true; job.disconnected = true; }
+  });
+
+function log(text) {
+  const box = $("log");
+  box.textContent += text + "\n";
+  box.scrollTop = box.scrollHeight;
+}
+function message(text) {
+  $("message").textContent = text || "";
+  $("message").classList.toggle("show", !!text);
+}
+
+/* ---------- connecting ---------- */
+async function ensureConnected() {
+  if (grbl.open) return;
+  if (!("serial" in navigator)) throw new Error("This browser can't use USB. Open this page in Chrome or Edge.");
+  const known = await navigator.serial.getPorts();
+  const port = known.length === 1 ? known[0] : await navigator.serial.requestPort();
+  log("Connecting...");
+  try {
+    await grbl.connect(port);
+  } catch (e) {
+    if (e.name === "NetworkError" || e.name === "InvalidStateError") {
+      throw new Error("The port is busy. Disconnect or close UGS and the Arduino Serial Monitor, then try again.");
+    }
+    throw e;
+  }
+  $("pill").textContent = "Connected";
+  $("pill").classList.add("on");
+  log("Connected to GRBL.");
+}
+
+async function unlockIfNeeded() {
+  if ((await grbl.status()) === "Alarm") {
+    log("Clearing alarm ($X)");
+    await grbl.send("$X");
+  }
+}
+
+// Only writes settings that differ, because GRBL stores them in EEPROM.
+async function applyMachineSettings() {
+  const wanted = {
+    3: (settings.flipX ? 1 : 0) | (settings.flipY ? 2 : 0) | (settings.flipZ ? 4 : 0),   // direction flips
+    100: settings.stepsX, 101: settings.stepsY, 102: 11.378,   // Z: 4096 half-steps / 360 degrees
+    110: settings.speed, 111: settings.speed, 112: 3000, 122: 500,
+  };
+  const current = {};
+  for (const line of await grbl.query("$$")) {
+    const m = line.match(/^\$(\d+)=([\d.]+)/);
+    if (m) current[m[1]] = Number(m[2]);
+  }
+  for (const [key, value] of Object.entries(wanted)) {
+    if (Math.abs((current[key] ?? NaN) - value) < 0.001) continue;
+    const reply = await grbl.send(`$${key}=${value}`);
+    log(`$${key}=${value}: ${reply}`);
+    if (reply !== "ok") throw new Error(`GRBL refused setting $${key} (${reply}).`);
+  }
+}
+
+/* ---------- plotting ---------- */
+async function play() {
+  message("");
+  if (job.running) return;
+  setRunning(true);
+  try {
+    await ensureConnected();
+    await unlockIfNeeded();
+    await applyMachineSettings();
+    const zero = await grbl.send("G10 L20 P1 X0 Y0 Z0");   // the pen's position now is the start
+    if (zero !== "ok") throw new Error(`GRBL refused the start position (${zero}).`);
+    marker = [0, 0, 0];
+    log(`Plot started: ${gcode.length} lines.`);
+    await stream();
+    if (job.disconnected) throw new Error("The Arduino disconnected. Check the USB cable, then put the pen back at the start.");
+    if (job.alarm) throw new Error("GRBL stopped with an alarm. Put the pen back at the start and press Play.");
+    log(job.stop ? "Plot stopped." : "Plot finished.");
+    if (job.stop) message("Stopped. Put the pen back at the start before pressing Play again.");
+  } catch (e) {
+    message(e.name === "NotFoundError" ? "No port chosen. Press Play and choose the Arduino." : e.message);
+    log("Problem: " + e.message);
+  }
+  setRunning(false);
+}
+
+async function stream() {
+  job.alarm = false;                       // any alarm before this point was already cleared
+  const poll = setInterval(() => { if (grbl.open) grbl.raw("?").catch(() => {}); }, 400);
+  try {
+    for (let i = 0; i < gcode.length; i++) {
+      if (job.stop || job.alarm) return;
+      const reply = await grbl.send(gcode[i]);
+      if (job.stop) return;
+      if (reply === "error:alarm") { job.alarm = true; return; }
+      if (reply !== "ok") throw new Error(`GRBL rejected line ${i + 1} "${gcode[i]}" (${reply}).`);
+      drawnLines = i + 1;
+      $("progress").value = 100 * drawnLines / gcode.length;
+    }
+    for (;;) {                             // GRBL says ok before the moves finish
+      await sleep(300);
+      if (job.stop || job.alarm) return;
+      if ((await grbl.status()) === "Idle") return;
+    }
+  } finally {
+    clearInterval(poll);
+  }
+}
+
+function setRunning(running) {
+  Object.assign(job, { running, paused: false });
+  if (running) Object.assign(job, { stop: false, alarm: false, disconnected: false });
+  if (running) { drawnLines = 0; $("progress").value = 0; }
+  $("pause").textContent = "Pause";
+  refreshButtons();
+}
+
+async function togglePause() {
+  job.paused = !job.paused;
+  await grbl.raw(job.paused ? "!" : "~");  // GRBL feed hold / resume
+  $("pause").textContent = job.paused ? "Resume" : "Pause";
+}
+
+async function stop() {
+  job.stop = true;
+  if (grbl.open) {
+    await grbl.raw("!");
+    await sleep(200);
+    await grbl.raw("\x18");                // soft reset clears everything queued
+    grbl.releaseWaiting("error:stopped");
+  }
+}
+
+async function jog(axis, direction, step = Number($("jogStep").value)) {
+  message("");
+  try {
+    await ensureConnected();
+    await unlockIfNeeded();
+    await applyMachineSettings();          // so a new flip or steps value is used straight away
+    const distance = step * direction;
+    const feed = axis === "Z" ? 600 : Math.min(settings.speed, 150);
+    const reply = await grbl.send(`$J=G21G91${axis}${distance}F${feed}`);
+    log(`Move ${axis} ${distance}: ${reply}`);
+  } catch (e) {
+    message(e.name === "NotFoundError" ? "No port chosen." : e.message);
+  }
+}
+
+/* ---------- preview and page wiring ---------- */
+function sizeProblem() {
+  const w = Number($("width").value), h = Number($("height").value);
+  if (!(w > 0 && h > 0)) return "Enter a size above 0.";
+  if (w > settings.bedW || h > settings.bedH) {
+    return `That size is bigger than the machine's ${settings.bedW} x ${settings.bedH} cm limit. Change the size, or the limit in Machine setup.`;
+  }
+  return "";
+}
+
+function refreshButtons() {
+  $("play").disabled = job.running || !gcode.length || !!sizeProblem();
+  $("pause").disabled = !job.running;
+  $("stop").disabled = !job.running;
+  $("download").disabled = !gcode.length;
+  document.querySelectorAll("[data-jog], #connect, #calMoveX, #calMoveY").forEach((b) => { b.disabled = job.running; });
+}
+
+function rebuild() {
+  if (image) {
+    loops = traceImage(image, settings.threshold, settings.detail);
+    if (!loops.length) {
+      paths = []; gcode = [];
+      $("stats").textContent = "Nothing dark enough found. Move the darkness cut-off to the right.";
+      drawPreview(); refreshButtons();
+      return;
+    }
+    const b = boundsOf(loops);
+    aspect = b.height / b.width;
+    $("height").value = (Number($("width").value) * aspect).toFixed(1);
+    updateJob();
+  }
+}
+
+function updateJob() {
+  if (!loops.length) return;
+  paths = orderPaths(toMillimetres(loops, Number($("width").value) * 10));
+  gcode = makeGcode(paths, settings.speed, settings.lift);
+  let draw = 0, travel = 0, pos = [0, 0];
+  for (const path of paths) {
+    travel += Math.hypot(path[0][0] - pos[0], path[0][1] - pos[1]);
+    for (let i = 1; i < path.length; i++) draw += Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
+    pos = path[path.length - 1];
+  }
+  travel += Math.hypot(pos[0], pos[1]);
+  const seconds = (draw + travel) / settings.speed * 60 + paths.length * 3;
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  $("stats").textContent = `${paths.length} outline${paths.length === 1 ? "" : "s"}, ${(draw / 10).toFixed(1)} cm of drawing, about ${minutes} min`;
+  message(sizeProblem());
+  drawPreview();
+  refreshButtons();
+}
+
+function drawPreview() {
+  const canvas = $("preview");
+  const box = $("previewBox").getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = box.width * dpr; canvas.height = box.height * dpr;
+  const ctx = canvas.getContext("2d");
+  const css = getComputedStyle(document.documentElement);
+  const color = (name) => css.getPropertyValue(name).trim();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, box.width, box.height);
+
+  const bedW = settings.bedW * 10, bedH = settings.bedH * 10;
+  const pad = 14;
+  const s = Math.min((box.width - 2 * pad) / bedW, (box.height - 2 * pad) / bedH);
+  const ox = (box.width - bedW * s) / 2, oy = (box.height + bedH * s) / 2;
+  const X = (x) => ox + x * s, Y = (y) => oy - y * s;
+
+  ctx.fillStyle = color("--paper");
+  ctx.fillRect(X(0), Y(bedH), bedW * s, bedH * s);
+  ctx.strokeStyle = color("--line");
+  ctx.strokeRect(X(0), Y(bedH), bedW * s, bedH * s);
+
+  let pos = [0, 0];
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 4]);
+  ctx.strokeStyle = color("--travel");
+  ctx.beginPath();
+  for (const path of paths) {
+    ctx.moveTo(X(pos[0]), Y(pos[1]));
+    ctx.lineTo(X(path[0][0]), Y(path[0][1]));
+    pos = path[path.length - 1];
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#111";
+  ctx.beginPath();
+  for (const path of paths) {
+    path.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+  }
+  ctx.stroke();
+
+  if (marker && job.running) {
+    ctx.fillStyle = color("--mark");
+    ctx.beginPath();
+    ctx.arc(X(marker[0]), Y(marker[1]), 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function loadFile(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) { message("Please choose a picture file."); return; }
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    image = img;
+    $("drop").textContent = file.name;
+    message("");
+    rebuild();
+  };
+  img.onerror = () => message("That picture could not be opened.");
+  img.src = url;
+}
+
+function bindSetting(id, rebuildAll) {
+  const input = $(id);
+  input.value = settings[id];
+  const label = $(id + "Value");
+  if (label) label.textContent = settings[id];
+  input.addEventListener("input", () => {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || input.value === "") return;
+    settings[id] = value;
+    if (label) label.textContent = value;
+    saveSettings();
+    if (rebuildAll) rebuild(); else updateJob();
+    message(sizeProblem());
+    drawPreview(); refreshButtons();
+  });
+}
+
+["threshold", "detail"].forEach((id) => bindSetting(id, true));
+["bedW", "bedH", "speed", "lift", "stepsX", "stepsY"].forEach((id) => bindSetting(id, false));
+
+$("file").addEventListener("change", (e) => loadFile(e.target.files[0]));
+const drop = $("drop");
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => loadFile(e.dataTransfer.files[0]));
+
+$("width").addEventListener("input", () => {
+  $("height").value = (Number($("width").value) * aspect).toFixed(1);
+  updateJob(); message(sizeProblem()); refreshButtons();
+});
+$("height").addEventListener("input", () => {
+  $("width").value = (Number($("height").value) / aspect).toFixed(1);
+  updateJob(); message(sizeProblem()); refreshButtons();
+});
+
+$("play").addEventListener("click", play);
+$("pause").addEventListener("click", togglePause);
+$("stop").addEventListener("click", stop);
+$("connect").addEventListener("click", async () => {
+  message("");
+  try { await ensureConnected(); await grbl.status(); }
+  catch (e) { message(e.name === "NotFoundError" ? "No port chosen." : e.message); }
+});
+document.querySelectorAll("[data-jog]").forEach((b) => {
+  const [axis, direction] = b.dataset.jog.split(",");
+  b.addEventListener("click", () => jog(axis, Number(direction)));
+});
+["flipX", "flipY", "flipZ"].forEach((id) => {
+  const box = $(id);
+  box.checked = !!settings[id];
+  box.addEventListener("change", () => { settings[id] = box.checked; saveSettings(); refreshButtons(); });
+});
+
+// After a 10 mm move: new steps per mm = old value x 10 / distance really moved
+function calibrate(axis) {
+  const measured = Number($("cal" + axis).value);
+  if (!(measured > 0)) { message(`Type how far ${axis} really moved, in mm.`); return; }
+  const key = "steps" + axis;
+  const value = Math.round(settings[key] * 10 / measured * 100) / 100;
+  settings[key] = value;
+  $(key).value = value;
+  $("cal" + axis).value = "";
+  saveSettings();
+  message("");
+  log(`${axis} steps per mm set to ${value}. Move ${axis} 10 mm again to check.`);
+}
+["X", "Y"].forEach((axis) => {
+  $("calMove" + axis).addEventListener("click", () => jog(axis, 1, 10));
+  $("calFix" + axis).addEventListener("click", () => calibrate(axis));
+});
+
+$("download").addEventListener("click", () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([gcode.join("\n") + "\n"], { type: "text/plain" }));
+  a.download = "drawing.gcode";
+  a.click();
+});
+window.addEventListener("resize", drawPreview);
+window.addEventListener("beforeunload", (e) => { if (job.running) e.preventDefault(); });
+
+if (!("serial" in navigator)) message("This browser can't use USB. Open this page in Chrome or Edge.");
+drawPreview();
+refreshButtons();
+</script>
+</body>
+</html>
