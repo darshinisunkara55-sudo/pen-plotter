@@ -2493,6 +2493,16 @@ function message(text) {
 }
 
 /* ---------- connecting ---------- */
+let portAskedAt = 0;
+// The port list closed: either the person pressed Cancel, or the browser couldn't show it at all.
+function noPortMessage() {
+  if (Date.now() - portAskedAt < 1500) {
+    return "The browser didn't show the list of ports. Open this page in Google Chrome or Microsoft Edge " +
+      "(not inside another app), and make sure Settings > Privacy and security > Site settings > Serial ports " +
+      "is set to let sites ask. Then press Connect to Arduino again.";
+  }
+  return "No port chosen. Press Connect to Arduino and pick the Arduino (it usually says USB-SERIAL or Arduino Uno, COM...).";
+}
 function ensureConnected(port) {
   if (grbl.open) return Promise.resolve();
   if (!connecting) connecting = connectAndPrepare(port).finally(() => { connecting = null; });
@@ -2505,6 +2515,7 @@ async function connectAndPrepare(port) {
   if (!("serial" in navigator)) throw new Error("This browser can't use USB. Open this page in Chrome or Edge.");
   if (!port) {
     const known = await navigator.serial.getPorts();
+    portAskedAt = Date.now();
     port = known.length === 1 ? known[0] : await navigator.serial.requestPort();
   }
   log("Connecting...");
@@ -2577,7 +2588,7 @@ async function returnButton() {
     await ensureConnected();               // a fresh connection returns the pen by itself
     if (wasOpen) await returnToStart(false);
   } catch (e) {
-    message(e.name === "NotFoundError" ? "No port chosen." : e.message);
+    message(e.name === "NotFoundError" ? noPortMessage() : e.message);
     log("Problem: " + e.message);
   }
   setRunning(false);
@@ -2649,7 +2660,7 @@ async function play() {
       log("Plot finished. The pen is back at the start.");
     }
   } catch (e) {
-    message(e.name === "NotFoundError" ? "No port chosen. Press Play and choose the Arduino." : e.message);
+    message(e.name === "NotFoundError" ? noPortMessage() : e.message);
     log("Problem: " + e.message);
   }
   setRunning(false);
@@ -2713,7 +2724,7 @@ async function jog(axis, direction, step = Number($("jogStep").value)) {
     const reply = await grbl.send(`$J=G21G91${axis}${distance}F${feed}`);
     log(`Move ${axis} ${distance}: ${reply}`);
   } catch (e) {
-    message(e.name === "NotFoundError" ? "No port chosen." : e.message);
+    message(e.name === "NotFoundError" ? noPortMessage() : e.message);
   }
 }
 
@@ -2877,7 +2888,7 @@ $("stop").addEventListener("click", stop);
 $("connect").addEventListener("click", async () => {
   message("");
   try { await ensureConnected(); await grbl.status(); }
-  catch (e) { message(e.name === "NotFoundError" ? "No port chosen." : e.message); }
+  catch (e) { message(e.name === "NotFoundError" ? noPortMessage() : e.message); }
 });
 document.querySelectorAll("[data-jog]").forEach((b) => {
   const [axis, direction] = b.dataset.jog.split(",");
