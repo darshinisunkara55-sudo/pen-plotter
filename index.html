@@ -149,6 +149,11 @@
           <button data-jog="Y,1">Y+</button><button data-jog="Y,-1">Y-</button>
           <button data-jog="Z,1">Pen +</button><button data-jog="Z,-1">Pen -</button>
         </div>
+        <div class="controls">
+          <button id="setHome">Set this as home</button>
+          <button id="goHome">Go home</button>
+        </div>
+        <p class="hint" style="margin:4px 0 0">Move the pen to the bottom-left corner with the pen touching the paper, then press Set this as home. Play starts every drawing from there.</p>
         <div class="flips">
           <span>Flip direction:</span>
           <label><input id="flipX" type="checkbox"> X</label>
@@ -2053,7 +2058,7 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /* ---------- saved settings ---------- */
-const settings = { threshold: 128, detail: 1, bedW: 4, bedH: 4, speed: 150, lift: 30, stepsX: 250, stepsY: 250,
+const settings = { threshold: 128, detail: 1, bedW: 14, bedH: 14, speed: 100, lift: 30, stepsX: 85, stepsY: 102,
   flipX: false, flipY: false, flipZ: false };
 try { Object.assign(settings, JSON.parse(localStorage.getItem("plotter") || "{}")); } catch (e) { /* use defaults */ }
 function saveSettings() {
@@ -2448,7 +2453,8 @@ async function installFirmware(port, onProgress) {
 /* ---------- remembering where the pen is, so it can go back to the start ---------- */
 let penRecord = null;                      // { pos: [x, y, z], lift } while the pen is away from the start
 try { penRecord = JSON.parse(localStorage.getItem("plotterPen") || "null"); } catch (e) { /* none */ }
-let positionKnown = false;                 // false after a fresh connection: GRBL restarts at 0,0
+let positionKnown = false;
+let homeSet = false;                       // true after Set this as home, until the Arduino restarts                 // false after a fresh connection: GRBL restarts at 0,0
 
 function setPenRecord(record) {
   penRecord = record;
@@ -2520,6 +2526,7 @@ async function connectAndPrepare(port) {
   }
   log("Connecting...");
   positionKnown = false;
+  homeSet = false;
   let ours = false;
   try {
     await grbl.connect(port);
@@ -2634,6 +2641,57 @@ async function applyMachineSettings() {
   }
 }
 
+/* ---------- home ---------- */
+async function sendAll(lines) {
+  for (const line of lines) {
+    const reply = await grbl.send(line);
+    if (reply !== "ok") throw new Error(`GRBL refused "${line}" (${reply}).`);
+  }
+}
+
+async function waitUntilIdle() {
+  for (let i = 0; i < 1200; i++) {
+    await sleep(300);
+    if ((await grbl.status()) === "Idle") return;
+  }
+}
+
+async function setHome() {
+  message("");
+  try {
+    await ensureConnected();
+    await unlockIfNeeded();
+    await sendAll(["G10 L20 P1 X0 Y0 Z0"]);   // this spot is now 0,0,0
+    positionKnown = true;
+    homeSet = true;
+    marker = [0, 0, 0];
+    setPenRecord(null);
+    log("Home set here. Play and Go home use this spot.");
+    message("Home set. Play will start every drawing from here.");
+  } catch (e) {
+    message(e.name === "NotFoundError" ? noPortMessage() : e.message);
+  }
+  refreshButtons();
+}
+
+async function goHome() {
+  message("");
+  setRunning(true);
+  try {
+    await ensureConnected();
+    if (!homeSet) throw new Error("No home yet. Move the pen with the buttons, then press Set this as home.");
+    await unlockIfNeeded();
+    await applyMachineSettings();
+    await sendAll(["G90", `G0 Z${settings.lift}`, "G0 X0 Y0", "G0 Z0"]);
+    await waitUntilIdle();
+    log("Back at home.");
+  } catch (e) {
+    message(e.name === "NotFoundError" ? noPortMessage() : e.message);
+    log("Problem: " + e.message);
+  }
+  setRunning(false);
+}
+
 /* ---------- plotting ---------- */
 async function play() {
   message("");
@@ -2643,8 +2701,13 @@ async function play() {
     await ensureConnected();
     await unlockIfNeeded();
     await applyMachineSettings();
-    const zero = await grbl.send("G10 L20 P1 X0 Y0 Z0");   // the pen's position now is the start
-    if (zero !== "ok") throw new Error(`GRBL refused the start position (${zero}).`);
+    if (homeSet && positionKnown) {
+      log("Going to home first.");
+      await sendAll(["G90", `G0 Z${settings.lift}`, "G0 X0 Y0", "G0 Z0"]);
+    } else {
+      const zero = await grbl.send("G10 L20 P1 X0 Y0 Z0");   // the pen's position now is the start
+      if (zero !== "ok") throw new Error(`GRBL refused the start position (${zero}).`);
+    }
     marker = [0, 0, 0];
     positionKnown = true;
     setPenRecord({ pos: [0, 0, 0], lift: settings.lift });
@@ -2743,7 +2806,7 @@ function refreshButtons() {
   $("pause").disabled = !job.running;
   $("stop").disabled = !job.running;
   $("download").disabled = !gcode.length;
-  document.querySelectorAll("[data-jog], #connect, #calMoveX, #calMoveY").forEach((b) => { b.disabled = job.running; });
+  document.querySelectorAll("[data-jog], #connect, #calMoveX, #calMoveY, #setHome, #goHome").forEach((b) => { b.disabled = job.running; });
   $("returnHome").hidden = !penRecord || job.running;
 }
 
@@ -2900,6 +2963,8 @@ document.querySelectorAll("[data-jog]").forEach((b) => {
   box.addEventListener("change", () => { settings[id] = box.checked; saveSettings(); refreshButtons(); });
 });
 $("returnHome").addEventListener("click", returnButton);
+$("setHome").addEventListener("click", setHome);
+$("goHome").addEventListener("click", goHome);
 
 // Connect by itself when an Arduino this page has used before is plugged in.
 if ("serial" in navigator) {
