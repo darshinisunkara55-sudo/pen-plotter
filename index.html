@@ -42,6 +42,10 @@
   #message { display: none; background: var(--warn-bg); color: var(--warn-ink); padding: 10px 12px; border-radius: 8px; font-size: 14px; margin-bottom: 12px; }
   #message.show { display: block; }
   #previewBox { position: relative; height: min(62vh, 620px); min-height: 280px; }
+  #preview { touch-action: none; }
+  .placeRow { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-top: 8px; }
+  .placeRow .hint { margin: 0; }
+  .placeRow button { width: auto; padding: 6px 12px; white-space: nowrap; }
   canvas { width: 100%; height: 100%; display: block; border-radius: 6px; }
   #stats { font-size: 14px; color: var(--muted); min-height: 21px; margin: 0 0 8px; }
   progress { width: 100%; height: 10px; margin-top: 10px; accent-color: var(--accent); }
@@ -128,7 +132,7 @@
 
     <section>
       <h2>3. Plot</h2>
-      <p class="hint" style="margin:0 0 10px">Put the pen on the paper at the bottom-left corner of the drawing, then press Play.</p>
+      <p class="hint" style="margin:0 0 10px">Put the pen at home (the bottom-left corner of the paper area, or the spot you set with Set this as home), then press Play.</p>
       <button id="play" disabled>Play</button>
       <div class="controls">
         <button id="pause" disabled>Pause</button>
@@ -189,6 +193,10 @@
     <section>
       <p id="stats">Choose a picture to see what will be drawn.</p>
       <div id="previewBox"><canvas id="preview"></canvas></div>
+      <div class="placeRow">
+        <span class="hint">Drag the picture to place it. The bottom-left corner of the paper area is home.</span>
+        <button id="centre" type="button">Centre picture</button>
+      </div>
     </section>
     <section>
       <h2>Machine log</h2>
@@ -2059,7 +2067,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /* ---------- saved settings ---------- */
 const settings = { threshold: 128, detail: 1, bedW: 14, bedH: 14, speed: 100, lift: 30, stepsX: 85, stepsY: 102,
-  flipX: false, flipY: false, flipZ: false };
+  flipX: false, flipY: false, flipZ: false, placeX: 0, placeY: 0 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem("plotter") || "{}")); } catch (e) { /* use defaults */ }
 function saveSettings() {
   try { localStorage.setItem("plotter", JSON.stringify(settings)); } catch (e) { /* not saved */ }
@@ -2826,9 +2834,21 @@ function rebuild() {
   }
 }
 
+// Shifts the picture to where it was dragged, kept inside the paper area. 0,0 is home.
+let picture = { x: 0, y: 0, w: 0, h: 0 };
+function placePaths(mmPaths) {
+  let w = 0, h = 0;
+  for (const path of mmPaths) for (const [x, y] of path) { w = Math.max(w, x); h = Math.max(h, y); }
+  const maxX = Math.max(0, settings.bedW * 10 - w), maxY = Math.max(0, settings.bedH * 10 - h);
+  settings.placeX = Math.min(Math.max(0, Number(settings.placeX) || 0), maxX);
+  settings.placeY = Math.min(Math.max(0, Number(settings.placeY) || 0), maxY);
+  picture = { x: settings.placeX, y: settings.placeY, w, h };
+  return mmPaths.map((path) => path.map(([x, y]) => [x + settings.placeX, y + settings.placeY]));
+}
+
 function updateJob() {
   if (!loops.length) return;
-  paths = orderPaths(toMillimetres(loops, Number($("width").value) * 10));
+  paths = orderPaths(placePaths(toMillimetres(loops, Number($("width").value) * 10)));
   gcode = makeGcode(paths, settings.speed, settings.lift);
   let draw = 0, travel = 0, pos = [0, 0];
   for (const path of paths) {
@@ -2839,7 +2859,8 @@ function updateJob() {
   travel += Math.hypot(pos[0], pos[1]);
   const seconds = (draw + travel) / settings.speed * 60 + paths.length * 3;
   const minutes = Math.max(1, Math.round(seconds / 60));
-  $("stats").textContent = `${paths.length} outline${paths.length === 1 ? "" : "s"}, ${(draw / 10).toFixed(1)} cm of drawing, about ${minutes} min`;
+  $("stats").textContent = `${paths.length} outline${paths.length === 1 ? "" : "s"}, ${(draw / 10).toFixed(1)} cm of drawing, about ${minutes} min · ` +
+    `starts ${(picture.x / 10).toFixed(1)} cm right and ${(picture.y / 10).toFixed(1)} cm up from home`;
   message(sizeProblem());
   drawPreview();
   refreshButtons();
@@ -2861,6 +2882,7 @@ function drawPreview() {
   const s = Math.min((box.width - 2 * pad) / bedW, (box.height - 2 * pad) / bedH);
   const ox = (box.width - bedW * s) / 2, oy = (box.height + bedH * s) / 2;
   const X = (x) => ox + x * s, Y = (y) => oy - y * s;
+  previewView = { s, ox, oy };
 
   ctx.fillStyle = color("--paper");
   ctx.fillRect(X(0), Y(bedH), bedW * s, bedH * s);
@@ -2887,6 +2909,16 @@ function drawPreview() {
   }
   ctx.stroke();
 
+  if (paths.length && !job.running) {          // dashed box: drag it to move the picture
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = color("--accent");
+    ctx.strokeRect(X(picture.x), Y(picture.y + picture.h), picture.w * s, picture.h * s);
+    ctx.setLineDash([]);
+  }
+  ctx.fillStyle = color("--accent");             // home
+  ctx.beginPath(); ctx.arc(X(0), Y(0), 4, 0, Math.PI * 2); ctx.fill();
+
   if (marker && job.running) {
     ctx.fillStyle = color("--mark");
     ctx.beginPath();
@@ -2894,6 +2926,54 @@ function drawPreview() {
     ctx.fill();
   }
 }
+
+let previewView = null, drag = null;
+function previewPoint(e) {
+  const r = $("preview").getBoundingClientRect(), v = previewView;
+  return [(e.clientX - r.left - v.ox) / v.s, (v.oy - (e.clientY - r.top)) / v.s];
+}
+$("preview").addEventListener("pointerdown", (e) => {
+  if (!paths.length || job.running || !previewView) return;
+  const [x, y] = previewPoint(e);
+  const inside = x >= picture.x && x <= picture.x + picture.w && y >= picture.y && y <= picture.y + picture.h;
+  if (!inside) return;
+  drag = { x, y, placeX: settings.placeX, placeY: settings.placeY, shownX: 0, shownY: 0 };
+  $("preview").setPointerCapture(e.pointerId);
+});
+$("preview").addEventListener("pointermove", (e) => {
+  if (!drag) {
+    if (previewView && paths.length && !job.running) {
+      const [x, y] = previewPoint(e);
+      const inside = x >= picture.x && x <= picture.x + picture.w && y >= picture.y && y <= picture.y + picture.h;
+      $("preview").style.cursor = inside ? "grab" : "";
+    }
+    return;
+  }
+  const [x, y] = previewPoint(e);
+  const maxX = Math.max(0, settings.bedW * 10 - picture.w), maxY = Math.max(0, settings.bedH * 10 - picture.h);
+  const nx = Math.min(Math.max(0, drag.placeX + x - drag.x), maxX);
+  const ny = Math.min(Math.max(0, drag.placeY + y - drag.y), maxY);
+  const dx = nx - picture.x, dy = ny - picture.y;   // shift what is shown; the G-code is rebuilt on release
+  paths = paths.map((path) => path.map(([px, py]) => [px + dx, py + dy]));
+  picture = { ...picture, x: nx, y: ny };
+  $("preview").style.cursor = "grabbing";
+  drawPreview();
+});
+function endDrag() {
+  if (!drag) return;
+  drag = null;
+  settings.placeX = picture.x; settings.placeY = picture.y;
+  saveSettings();
+  updateJob();
+}
+$("preview").addEventListener("pointerup", endDrag);
+$("preview").addEventListener("pointercancel", endDrag);
+$("centre").addEventListener("click", () => {
+  settings.placeX = (settings.bedW * 10 - picture.w) / 2;
+  settings.placeY = (settings.bedH * 10 - picture.h) / 2;
+  saveSettings();
+  updateJob();
+});
 
 function loadFile(file) {
   if (!file) return;
